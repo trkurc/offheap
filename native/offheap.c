@@ -194,7 +194,6 @@ lookup_recursive(struct node * n, struct nodeValue *last, unsigned int addr, int
  * @note Invariant: values passed in must be valid, no error checking
  * @return nodeValue at longest prefix match in trie, NULL if not found
  */
-
 static struct nodeValue *
 lookup(struct trie *t, unsigned int addr){
   if(t->root == NULL){
@@ -203,6 +202,38 @@ lookup(struct trie *t, unsigned int addr){
   return lookup_recursive(t->root, NULL, addr, 0);
 }
 
+/**
+ * @brief Recursive function for DFS deletion of trie
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ */
+static void
+delete_recursive(struct node *n){
+  if(n->left != NULL){
+    delete_recursive(n->left);
+  }
+  if(n->right != NULL){
+    delete_recursive(n->right);
+  }
+  if(n->value != NULL){
+    // NOTE: INVARIANT! value must have been allocated in one large block
+    free(n->value);
+  }
+  free(n);
+}
+
+/**
+ * @brief Deallocate trie
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ */
+static void
+delete(struct trie *t){
+  if(t->root != NULL){
+    delete_recursive(t->root);
+  }
+  free(t);
+}
 
 /**
  * @brief JNI call to allocate a new trie. 
@@ -223,6 +254,20 @@ Java_org_apache_nifi_util_lookup_OffHeapLookup_newTrie(JNIEnv *env, jclass cls){
 }
 
 /**
+ * @brief JNI call to tear down a trie
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ * @throws OutOfMemoryError if memory cannot be allocated while creating trie
+ * @return jlong used for referencing trie
+ */
+JNIEXPORT void JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_deleteTrie(JNIEnv *env, jclass cls, jlong pointer){
+    struct trie *t = (struct trie *)pointer;
+    delete(t);
+}
+
+
+/**
  * @brief JNI call to insert into trie. 
  * 
  * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
@@ -241,7 +286,7 @@ Java_org_apache_nifi_util_lookup_OffHeapLookup_trieInsert(JNIEnv *env, jclass cl
 
     jsize lengthOfArray = (*env)->GetArrayLength(env, bytes);
     
-    struct nodeValue * nv = (struct nodeValue *)malloc(lengthOfArray + sizeof(struct nodeValue) + 1);
+    struct nodeValue * nv = (struct nodeValue *)malloc(lengthOfArray + sizeof(struct nodeValue));
     if(nv == NULL){
       throwOutOfMemoryError(env, "Unable to allocate offheap storage for value");
     }
