@@ -22,138 +22,249 @@
 
 //#define DEBUG 1
 
+/**
+ * @brief Generic length/value tuple
+ *
+ */
 struct nodeValue{
   jsize valueLen;
   jbyte *value;
 };
 
+/**
+ * @brief Trie node 
+ *
+ */
 struct node{
   struct node *left;
   struct node *right;
   struct nodeValue *value;
 };
 
+/**
+ * @brief Trie base struct 
+ *
+ */
 struct trie{
     struct node *root;
 };
 
-inline int GETBIT(unsigned int addr, int depth){
+/**
+ * @brief Used for retrieving the appropriate bit for a trie depth from a 32 bit unsigned in 
+ */
+static inline int GETBIT(unsigned int addr, int depth){
     return (addr >> (31-depth)) & 0x1;
 }
 
-#define GETBIT(addr, depth) ((addr >> (31-depth)) & 0x1)
+//#define GETBIT(addr, depth) ((addr >> (31-depth)) & 0x1)
 
 
-void
-insert_recursive(struct node * n, unsigned int addr, int mask, int depth, struct nodeValue *value){
-    if(mask == depth){
-      if(n->value != NULL){
-	// NOTE: invariant, node and value allocated in one go
-	free(n->value);
-      }
-      n->value = value;
-      return;
+/**
+ * @brief Utility function for throwing an OutOfMemory error
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ * @return Will return -1 if class not found, value returned by JNI funtion ThrowNew otherwise
+ */
+static jint 
+throwOutOfMemoryError( JNIEnv *env, char *message ){
+    jclass jc;
+    jc = (*env)->FindClass( env, "java/lang/OutOfMemoryError" );
+    if(jc == NULL) {
+      // NOTE: Shouldn't happen. Should get NoClassDefFound 
+      return -1;
     }
-    int direction = GETBIT(addr, depth);
-
-    struct node **next;
-
-    if(direction == 0){
-        next = &(n->left);
-    }
-    else{
-        next = &(n->right);
-    }
-#ifdef DEBUG
-    printf("inserting [%d] at depth [%d]\n", direction, depth);
-#endif
-
-    if((*next) == NULL){
-        *next = (struct node *) malloc(sizeof(struct node));
-        (*next)->left = NULL;
-        (*next)->right = NULL;
-        (*next)->value = NULL;
-    }
-    insert_recursive((*next), addr, mask, depth+1, value);
+    return (*env)->ThrowNew(env, jc, message );
 }
 
-void
-insert(struct trie *t, unsigned int addr, int mask, struct nodeValue *value){
-    if(t->root == NULL){
-        t->root = (struct node *)malloc(sizeof(struct node));
-        t->root->left = NULL;
-        t->root->right = NULL;
-        t->root->value = NULL;
-    }
-    insert_recursive(t->root, addr, mask, 0, value);
+/**
+ * @brief Utility function for throwing an Error
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ * @return Will return -1 if class not found, value returned by JNI funtion ThrowNew otherwise
+ */
+static jint 
+throwError(JNIEnv *env, char *message){
+  jclass jc;
+  jc = (*env)->FindClass( env, "java/lang/Error" );
+  if(jc == NULL) {
+    // NOTE: Shouldn't happen. Should get NoClassDefFound 
+    return -1;
+  }
+  return (*env)->ThrowNew(env, jc, message );
 }
 
 
-struct nodeValue *
-lookup_recursive(struct node * n, struct nodeValue *last, unsigned int addr, int depth){
-
-    int direction = GETBIT(addr, depth);
-
-    struct node *next;
-
-    if(direction == 0){
-        next = n->left;
-    }
-    else{
-        next = n->right;
-    }
-#ifdef DEBUG
-    printf("looking [%d] at depth [%d]\n", direction, depth);
-#endif
+/**
+ * @brief Recursive function for adding value to trie
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ * @throws OutOfMemoryError if memory cannot be allocated while inserting
+ */
+static void
+insert_recursive(JNIEnv *env, struct node * n, unsigned int addr, int mask, int depth, struct nodeValue *value){
+  if(mask == depth){
     if(n->value != NULL){
-      last = n->value;
+      // NOTE: invariant, node and value allocated in one go
+      free(n->value);
     }
-
-    if(next == NULL){
-        return last;
+    n->value = value;
+    return;
+  }
+  int direction = GETBIT(addr, depth);
+  
+  struct node **next;
+  
+  if(direction == 0){
+    next = &(n->left);
+  }
+  else{
+    next = &(n->right);
+  }
+#ifdef DEBUG
+  printf("inserting [%d] at depth [%d]\n", direction, depth);
+#endif
+  
+  if((*next) == NULL){
+    *next = (struct node *) malloc(sizeof(struct node));
+    if(*next == NULL){
+      throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
     }
-    return lookup_recursive(next, last, addr, depth+1);
+    (*next)->left = NULL;
+    (*next)->right = NULL;
+    (*next)->value = NULL;
+  }
+  insert_recursive(env, (*next), addr, mask, depth+1, value);
 }
 
-struct nodeValue *
-lookup(struct trie *t, unsigned int addr){
+/**
+ * @brief Function for adding value to trie
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ * @throws OutOfMemoryError if memory cannot be allocated while inserting
+ */
+static void
+insert(JNIEnv *env, struct trie *t, unsigned int addr, int mask, struct nodeValue *value){
+  if(t->root == NULL){
+    t->root = (struct node *)malloc(sizeof(struct node));
     if(t->root == NULL){
-       return NULL;
+      throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
     }
-    return lookup_recursive(t->root, NULL, addr, 0);
+
+    t->root->left = NULL;
+    t->root->right = NULL;
+    t->root->value = NULL;
+  }
+  insert_recursive(env, t->root, addr, mask, 0, value);
 }
 
-JNIEXPORT jlong JNICALL Java_org_apache_nifi_util_lookup_OffHeapLookup_getTrie(JNIEnv *env, jclass cls){
-    struct trie * t = (struct trie *)malloc(sizeof(struct trie));
-    if(t == NULL){
-        // throw exception?
-        return 0;
-    }
-    t->root = NULL;
-    return (jlong)t;
+/**
+ * @brief Recursive function for looking up value in trie
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ * @return nodeValue at longest prefix match in trie, NULL if not found
+ */
+static struct nodeValue *
+lookup_recursive(struct node * n, struct nodeValue *last, unsigned int addr, int depth){
+  int direction = GETBIT(addr, depth);
+  
+  struct node *next;
+  
+  if(direction == 0){
+    next = n->left;
+  }
+  else{
+    next = n->right;
+  }
+#ifdef DEBUG
+  printf("looking [%d] at depth [%d]\n", direction, depth);
+#endif
+  if(n->value != NULL){
+    last = n->value;
+  }
+  
+  if(next == NULL){
+    return last;
+  }
+  return lookup_recursive(next, last, addr, depth+1);
 }
 
-JNIEXPORT void JNICALL Java_org_apache_nifi_util_lookup_OffHeapLookup_trieInsert(JNIEnv *env, jclass cls, jlong pointer, jint address, jint mask, jbyteArray bytes){
+/**
+ * @brief Function for looking up value in trie
+ * 
+ * @note Invariant: values passed in must be valid, no error checking
+ * @return nodeValue at longest prefix match in trie, NULL if not found
+ */
+
+static struct nodeValue *
+lookup(struct trie *t, unsigned int addr){
+  if(t->root == NULL){
+    return NULL;
+  }
+  return lookup_recursive(t->root, NULL, addr, 0);
+}
+
+
+/**
+ * @brief JNI call to allocate a new trie. 
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ * @throws OutOfMemoryError if memory cannot be allocated while creating trie
+ * @return jlong used for referencing trie
+ */
+JNIEXPORT jlong JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_newTrie(JNIEnv *env, jclass cls){
+  struct trie * t = (struct trie *)malloc(sizeof(struct trie));
+  if(t == NULL){
+    throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
+    return 0;
+  }
+  t->root = NULL;
+  return (jlong)t;
+}
+
+/**
+ * @brief JNI call to insert into trie. 
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ * @throws OutOfMemoryError if memory cannot be allocated while inserting value
+ * @throws Error on operations expected to not fail
+ */
+JNIEXPORT void JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_trieInsert(JNIEnv *env, jclass cls, jlong pointer, jint address, jint mask, jbyteArray bytes){
 
     struct trie *t = (struct trie *)pointer;
 
-    // TODO: check errors
     jbyte* bufferPtr = (*env)->GetByteArrayElements(env, bytes, NULL);
-    jsize lengthOfArray = (*env)->GetArrayLength(env, bytes);
+    if(bufferPtr == NULL){
+      throwError(env, "Operation failed when calling GetByteArrayElements");
+    }
 
+    jsize lengthOfArray = (*env)->GetArrayLength(env, bytes);
+    
     struct nodeValue * nv = (struct nodeValue *)malloc(lengthOfArray + sizeof(struct nodeValue) + 1);
+    if(nv == NULL){
+      throwOutOfMemoryError(env, "Unable to allocate offheap storage for value");
+    }
+    
     nv->valueLen = lengthOfArray;
     nv->value = (jbyte *)nv + sizeof(struct nodeValue);
 
-    // TODO: ADD null check
     memcpy(nv->value, bufferPtr, lengthOfArray);
 
     (*env)->ReleaseByteArrayElements(env, bytes, bufferPtr, 0);
     
-    insert(t, address, mask, nv);
+    insert(env, t, address, mask, nv);
 }
 
-JNIEXPORT jbyteArray JNICALL Java_org_apache_nifi_util_lookup_OffHeapLookup_trieLookup(JNIEnv *env, jclass cls, jlong pointer, jint address){
+/**
+ * @brief JNI call to lookup address in trie, using longest prefix match
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ * @throws OutOfMemoryError if memory cannot be allocated for return value
+ * @throws Error on operations expected to not fail
+ */
+JNIEXPORT jbyteArray JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_trieLookup(JNIEnv *env, jclass cls, jlong pointer, jint address){
   struct trie *t = (struct trie *)pointer;
   struct nodeValue *nv = lookup(t, address);
 
@@ -162,11 +273,12 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_nifi_util_lookup_OffHeapLookup_trie
   }
 
   jbyteArray arr = (*env)->NewByteArray(env, nv->valueLen);
-  // TODO: ADD null check
-
+  if(arr == NULL){
+     throwError(env, "Return byte array cannot be constructed");
+  }
+  // NOTE: Throws ArrayIndexOutOfBounds exception, should not occur
   (*env)->SetByteArrayRegion(env, arr, 0, nv->valueLen, (jbyte*)nv->value);
   return arr;
-
 }
 
 
