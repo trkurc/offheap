@@ -336,7 +336,7 @@ Java_org_apache_nifi_util_lookup_OffHeapLookup_trieLookup(JNIEnv *env, jclass cl
 struct hnode {
   struct nodeValue *key;
   struct nodeValue *value;
-  jint hashCode;
+  unsigned int hashCode;
   struct hnode * next;
 };
 
@@ -345,9 +345,9 @@ struct htable {
   jint tableLen;
 };
 
-static jint 
+static unsigned int
 hashNodeValue(struct nodeValue *nv){
-  jint result = 17;
+  unsigned int result = 17;
   
   jint len = nv->valueLen;
   jint i;
@@ -380,7 +380,10 @@ nodeValueEquality(struct nodeValue *left, struct nodeValue *right){
 
 void
 htable_insert(JNIEnv *env, struct htable *h, struct nodeValue *key, struct nodeValue *value){
-  jint hashcode = hashNodeValue(key);
+#ifdef DEBUG
+  printf("Entering htable insert\n");
+#endif
+  unsigned int hashcode = hashNodeValue(key);
   unsigned int index = hashcode % (h->tableLen);
   struct hnode * newNode = (struct hnode *)malloc(sizeof(struct hnode));
   if(newNode == NULL){
@@ -392,12 +395,16 @@ htable_insert(JNIEnv *env, struct htable *h, struct nodeValue *key, struct nodeV
   newNode->value = value;
   newNode->hashCode = hashcode;
   h->table[index] = newNode;
+#ifdef DEBUG
+  printf("Exiting htable insert\n");
+#endif
+
 }
 
 struct nodeValue *
 htable_lookup(struct htable *h, struct nodeValue *key){
-  jint hashcode = hashNodeValue(key);
-  jint index = hashcode % (h->tableLen);
+  unsigned int hashcode = hashNodeValue(key);
+  unsigned int index = hashcode % (h->tableLen);
   
   struct hnode *current = h->table[index];
   for(current = h->table[index]; current != NULL; current = current->next){

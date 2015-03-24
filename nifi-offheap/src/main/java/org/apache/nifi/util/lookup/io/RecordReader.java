@@ -14,26 +14,15 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-package org.apache.nifi.util.lookup;
+package org.apache.nifi.util.lookup.io;
 
-public class OffHeapLookup {
+import java.io.IOException;
+import java.io.InputStream;
 
-	/* 32 Bit Longest Prefix Match Methods */
-	
-	static native long newTrie();
-	static native void deleteTrie(long instance);
-	static native byte [] trieLookup(long instance, int address);
-	static native void trieInsert(long instance, int address, int mask, byte [] value );
-
-	/* Key/Value Lookup Methods */
-	
-	static native long newHtable(int size);
-	static native void deleteHtable(long instance);
-	static native byte [] htableLookup(long instance, byte [] key);
-	static native void htableInsert(long instance, byte [] key, byte [] value );
-	
-	static {
-		// TODO: Load this in a sensible way
-		System.loadLibrary("offheap");
-	}
+public interface RecordReader <KEY, VALUE> {
+	public boolean nextKeyValue() throws IOException, InterruptedException;
+	public KEY getCurrentKey() throws IOException, InterruptedException;
+	public VALUE getCurrentValue() throws IOException, InterruptedException;
+	public void initialize(InputStream input);
+	public void close();
 }

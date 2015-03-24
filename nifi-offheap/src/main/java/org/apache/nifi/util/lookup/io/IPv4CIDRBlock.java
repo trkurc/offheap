@@ -14,26 +14,25 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-package org.apache.nifi.util.lookup;
+package org.apache.nifi.util.lookup.io;
 
-public class OffHeapLookup {
 
-	/* 32 Bit Longest Prefix Match Methods */
-	
-	static native long newTrie();
-	static native void deleteTrie(long instance);
-	static native byte [] trieLookup(long instance, int address);
-	static native void trieInsert(long instance, int address, int mask, byte [] value );
+public class IPv4CIDRBlock {
 
-	/* Key/Value Lookup Methods */
+	int startAddress;
+	short prefixLength;
 	
-	static native long newHtable(int size);
-	static native void deleteHtable(long instance);
-	static native byte [] htableLookup(long instance, byte [] key);
-	static native void htableInsert(long instance, byte [] key, byte [] value );
-	
-	static {
-		// TODO: Load this in a sensible way
-		System.loadLibrary("offheap");
+	public void set(final int startAddress, final short prefixLength){
+		this.startAddress = startAddress;
+		this.prefixLength = prefixLength;
 	}
+	
+	public int getStartAddress() {
+		return startAddress;
+	}
+	public short getPrefixLength() {
+		return prefixLength;
+	}
+	
+	
 }
