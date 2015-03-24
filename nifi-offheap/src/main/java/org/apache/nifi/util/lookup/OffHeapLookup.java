@@ -18,10 +18,27 @@ package org.apache.nifi.util.lookup;
 
 public class OffHeapLookup {
 
+	/* 32 Bit Longest Prefix Match Methods */
+	
 	private static native long newTrie();
-	private static native long deleteTrie(long instance);
+	private static native void deleteTrie(long instance);
 	private static native byte [] trieLookup(long instance, int address);
 	private static native void trieInsert(long instance, int address, int mask, byte [] value );
 
+	/* Key/Value Lookup Methods */
+	
+	private static native long newHtable(int size);
+	private static native void deleteHtable(long instance);
+	private static native byte [] htableLookup(long instance, byte [] key);
+	private static native void htableInsert(long instance, byte [] key, byte [] value );
+	
+	public static void main(String args[]){
+		System.loadLibrary("offheap");
+
+		long instance = newHtable(17);
+		htableInsert(instance, "monkey".getBytes(), "hello".getBytes());
+		System.out.println(new String(htableLookup(instance, "monkey2".getBytes())));
+		
+	}
 	
 }

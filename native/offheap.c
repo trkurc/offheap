@@ -128,6 +128,7 @@ insert_recursive(JNIEnv *env, struct node * n, unsigned int addr, int mask, int 
     *next = (struct node *) malloc(sizeof(struct node));
     if(*next == NULL){
       throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
+      return;
     }
     (*next)->left = NULL;
     (*next)->right = NULL;
@@ -148,6 +149,7 @@ insert(JNIEnv *env, struct trie *t, unsigned int addr, int mask, struct nodeValu
     t->root = (struct node *)malloc(sizeof(struct node));
     if(t->root == NULL){
       throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
+      return;
     }
 
     t->root->left = NULL;
@@ -282,13 +284,16 @@ Java_org_apache_nifi_util_lookup_OffHeapLookup_trieInsert(JNIEnv *env, jclass cl
     jbyte* bufferPtr = (*env)->GetByteArrayElements(env, bytes, NULL);
     if(bufferPtr == NULL){
       throwError(env, "Operation failed when calling GetByteArrayElements");
+      return;
     }
 
     jsize lengthOfArray = (*env)->GetArrayLength(env, bytes);
     
     struct nodeValue * nv = (struct nodeValue *)malloc(lengthOfArray + sizeof(struct nodeValue));
     if(nv == NULL){
+      (*env)->ReleaseByteArrayElements(env, bytes, bufferPtr, 0);
       throwOutOfMemoryError(env, "Unable to allocate offheap storage for value");
+      return;
     }
     
     nv->valueLen = lengthOfArray;
@@ -319,7 +324,8 @@ Java_org_apache_nifi_util_lookup_OffHeapLookup_trieLookup(JNIEnv *env, jclass cl
 
   jbyteArray arr = (*env)->NewByteArray(env, nv->valueLen);
   if(arr == NULL){
-     throwError(env, "Return byte array cannot be constructed");
+     throwOutOfMemoryError(env, "Return byte array cannot be constructed");
+     return NULL;
   }
   // NOTE: Throws ArrayIndexOutOfBounds exception, should not occur
   (*env)->SetByteArrayRegion(env, arr, 0, nv->valueLen, (jbyte*)nv->value);
@@ -327,3 +333,231 @@ Java_org_apache_nifi_util_lookup_OffHeapLookup_trieLookup(JNIEnv *env, jclass cl
 }
 
 
+struct hnode {
+  struct nodeValue *key;
+  struct nodeValue *value;
+  jint hashCode;
+  struct hnode * next;
+};
+
+struct htable {
+  struct hnode **table;
+  jint tableLen;
+};
+
+static jint 
+hashNodeValue(struct nodeValue *nv){
+  jint result = 17;
+  
+  jint len = nv->valueLen;
+  jint i;
+ 
+  for(i=0; i < len; i++){
+    result = 31 * result + nv->value[i];
+  }	
+  return result;
+}
+
+
+static int
+nodeValueEquality(struct nodeValue *left, struct nodeValue *right){
+  if(left->valueLen == right->valueLen){
+    int match = left->valueLen;
+    int i=0;
+    jbyte *lv = left->value;
+    jbyte *rv = right->value;
+    for(i=0; i<match; i++){
+      if(*lv != *rv){
+	break;
+      }
+    }
+    if(i == match){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+void
+htable_insert(JNIEnv *env, struct htable *h, struct nodeValue *key, struct nodeValue *value){
+  jint hashcode = hashNodeValue(key);
+  unsigned int index = hashcode % (h->tableLen);
+  struct hnode * newNode = (struct hnode *)malloc(sizeof(struct hnode));
+  if(newNode == NULL){
+    throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
+    return;
+  }
+  newNode->next = h->table[index];
+  newNode->key = key;
+  newNode->value = value;
+  newNode->hashCode = hashcode;
+  h->table[index] = newNode;
+}
+
+struct nodeValue *
+htable_lookup(struct htable *h, struct nodeValue *key){
+  jint hashcode = hashNodeValue(key);
+  jint index = hashcode % (h->tableLen);
+  
+  struct hnode *current = h->table[index];
+  for(current = h->table[index]; current != NULL; current = current->next){
+    if(current->hashCode == hashcode && nodeValueEquality(key, current->key)){
+      return current->value;      
+    }
+  }
+  return NULL;
+}
+
+/**
+ * @brief JNI call to allocate a new htable. 
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ * @throws OutOfMemoryError if memory cannot be allocated while creating htable
+ * @return jlong used for referencing htable
+ */
+JNIEXPORT jlong JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_newHtable(JNIEnv *env, jclass cls, jint size){
+  // TODO: Error check size?
+  struct htable * h = (struct htable *)malloc(sizeof(struct htable));
+  if(h == NULL){
+    throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
+    return 0;
+  }
+  h->tableLen = size;
+
+  h->table = (struct hnode **)calloc(size, sizeof(struct hnode *));
+  if(h->table == NULL){
+    free(h);
+    throwOutOfMemoryError(env, "Unable to allocate offheap storage for trie");
+    return 0;
+  }
+  return (jlong)h;
+}
+
+/**
+ * @brief JNI call to tear down an htable
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ */
+JNIEXPORT void JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_deleteHtable(JNIEnv *env, jclass cls, jlong pointer){
+    struct htable *h = (struct htable *)pointer;
+    jint i;
+    for(i=0; i< h->tableLen; i++){
+      struct hnode *current;
+      for(current = h->table[i]; current != NULL; ){
+	// NOTE: invariant, the nodeValue value and struct allocated in one blob
+	free(current->value);
+	free(current->key);
+	
+	struct hnode *removeMe = current;
+	current = current->next;
+	free(removeMe);
+      }	
+    }
+    free(h->table);
+    free(h);
+}
+
+
+/**
+ * @brief JNI call to insert into htable. 
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ * @throws OutOfMemoryError if memory cannot be allocated while inserting value
+ * @throws Error on operations expected to not fail
+ */
+JNIEXPORT void JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_htableInsert(JNIEnv *env, jclass cls, jlong pointer, jbyteArray key, jbyteArray value){
+
+    struct htable *h = (struct htable *)pointer;
+
+    // Make Key
+
+    jbyte* bufferPtr = (*env)->GetByteArrayElements(env, key, NULL);
+    if(bufferPtr == NULL){
+      throwError(env, "Operation failed when calling GetByteArrayElements");
+    }
+
+    jsize lengthOfArray = (*env)->GetArrayLength(env, key);
+    
+    struct nodeValue * nvKey = (struct nodeValue *)malloc(lengthOfArray + sizeof(struct nodeValue));
+    if(nvKey == NULL){
+      (*env)->ReleaseByteArrayElements(env, key, bufferPtr, 0);
+      throwOutOfMemoryError(env, "Unable to allocate offheap storage for value");
+      return;
+    }
+    
+    nvKey->valueLen = lengthOfArray;
+    nvKey->value = (jbyte *)nvKey + sizeof(struct nodeValue);
+
+    memcpy(nvKey->value, bufferPtr, lengthOfArray);
+
+    (*env)->ReleaseByteArrayElements(env, key, bufferPtr, 0);
+    
+    // Make Value
+
+    bufferPtr = (*env)->GetByteArrayElements(env, value, NULL);
+    if(bufferPtr == NULL){
+      free(nvKey);
+      throwError(env, "Operation failed when calling GetByteArrayElements");
+      return;
+    }
+
+    lengthOfArray = (*env)->GetArrayLength(env, value);
+    
+    struct nodeValue * nvValue = (struct nodeValue *)malloc(lengthOfArray + sizeof(struct nodeValue));
+    if(nvValue == NULL){
+      // clean up
+      free(nvKey);
+      (*env)->ReleaseByteArrayElements(env, value, bufferPtr, 0);
+      throwOutOfMemoryError(env, "Unable to allocate offheap storage for value");
+      return;
+    }
+    
+    nvValue->valueLen = lengthOfArray;
+    nvValue->value = (jbyte *)nvValue + sizeof(struct nodeValue);
+
+    memcpy(nvValue->value, bufferPtr, lengthOfArray);
+
+    (*env)->ReleaseByteArrayElements(env, value, bufferPtr, 0);
+    
+    htable_insert(env, h, nvKey, nvValue);
+}
+
+/**
+ * @brief JNI call to lookup key in htable
+ * 
+ * @note Invariant: values passed in must be valid, no error checking. Appropriate for use as static method (jclass not referenced)
+ * @throws OutOfMemoryError if memory cannot be allocated for return value
+ * @throws Error on operations expected to not fail
+ */
+JNIEXPORT jbyteArray JNICALL 
+Java_org_apache_nifi_util_lookup_OffHeapLookup_htableLookup(JNIEnv *env, jclass cls, jlong pointer, jbyteArray key){
+  struct htable *h = (struct htable *)pointer;
+  struct nodeValue nvKey;
+  
+  jbyte *bufferPtr = (*env)->GetByteArrayElements(env, key, NULL);
+  if(bufferPtr == NULL){
+    throwError(env, "Operation failed when calling GetByteArrayElements");
+    return NULL;
+  }
+  nvKey.value = bufferPtr;
+  nvKey.valueLen = (*env)->GetArrayLength(env, key);
+
+  struct nodeValue *nv = htable_lookup(h, &nvKey);
+  (*env)->ReleaseByteArrayElements(env, key, bufferPtr, 0);
+
+  if(nv == NULL){
+    return NULL;
+  }
+
+  jbyteArray arr = (*env)->NewByteArray(env, nv->valueLen);
+  if(arr == NULL){
+     throwOutOfMemoryError(env, "Return byte array cannot be constructed");
+  }
+  //NOTE: Throws ArrayIndexOutOfBounds exception, should not occur
+  (*env)->SetByteArrayRegion(env, arr, 0, nv->valueLen, (jbyte*)nv->value);
+  return arr;
+
+}
